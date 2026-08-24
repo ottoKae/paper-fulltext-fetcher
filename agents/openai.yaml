@@ -1,4 +1,4 @@
 interface:
   display_name: "Paper Fulltext Fetcher"
-  short_description: "合法获取、验证全文，并可选生成本地可审计语料"
+  short_description: "合法获取并验证论文全文，可选生成可搜索、可定位、可审计的本地语料"
   default_prompt: "Use $paper-fulltext-fetcher to safely acquire and validate scholarly full text, then optionally prepare a local searchable corpus."

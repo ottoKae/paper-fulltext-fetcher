@@ -76,10 +76,13 @@ For local corpus preparation, install the optional environment and start with:
 ```powershell
 & scripts/bootstrap.ps1 -Corpus
 & scripts/run.ps1 corpus self-test
+& scripts/run.ps1 corpus self-test --pdf
 & scripts/run.ps1 corpus register --config my-review/acquisition.local.toml
 & scripts/run.ps1 corpus doctor --config my-review/acquisition.local.toml
 & scripts/run.ps1 corpus convert --config my-review/acquisition.local.toml --profile benchmark
 ```
+
+Use the optional `corpus self-test --pdf` before a real benchmark when the user asks to confirm PDF-model readiness. It converts one temporary synthetic page, may download local model weights on first use, never reads user papers, and keeps remote services disabled.
 
 On macOS or Linux, create `.venv`, install `requirements.txt`, and invoke `.venv/bin/python scripts/paper_fulltext_fetcher.py ...`. For corpus work, additionally install `requirements-corpus.txt` and invoke `.venv/bin/python scripts/corpus_tool.py ...`.
 

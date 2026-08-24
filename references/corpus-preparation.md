@@ -22,9 +22,12 @@
 ```powershell
 & .\scripts\bootstrap.ps1 -Corpus
 & .\scripts\run.ps1 corpus self-test
+& .\scripts\run.ps1 corpus self-test --pdf
 ```
 
 `corpus self-test` 只转换一份临时合成 JATS，用于确认 Docling 导入、JATS 解析和禁用远程服务的本地配置。它不读取用户论文，也不替代后续真实 PDF benchmark。
+
+可选的 `corpus self-test --pdf` 会再生成并转换一页临时合成 PDF，用于确认本机 PDF 模型链路。首次运行可能下载本地模型权重；它不读取用户论文，仍保持 `enable_remote_services=false`，也不替代真实论文的小样本 benchmark。
 
 该命令在 Skill 自己的 `.venv` 中安装本地 PDF、JATS、TableFormer 和 RapidOCR 依赖。模型可以在首次使用前显式准备；模型下载与论文上传是两件不同的事。转换始终设置：
 

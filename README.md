@@ -72,6 +72,7 @@ python -m pip install -r requirements.txt
 ```powershell
 & .\scripts\bootstrap.ps1 -Corpus
 & .\scripts\run.ps1 corpus self-test
+& .\scripts\run.ps1 corpus self-test --pdf
 ```
 
 macOS/Linux 对应命令是：
@@ -79,6 +80,7 @@ macOS/Linux 对应命令是：
 ```bash
 python -m pip install -r requirements-corpus.txt
 python scripts/corpus_tool.py self-test
+python scripts/corpus_tool.py self-test --pdf
 ```
 
 ## 它怎样完成任务
@@ -108,6 +110,7 @@ python scripts/corpus_tool.py self-test
 
 ```powershell
 & .\scripts\run.ps1 corpus self-test
+& .\scripts\run.ps1 corpus self-test --pdf
 & .\scripts\run.ps1 corpus register --config .\my-review\acquisition.local.toml
 & .\scripts\run.ps1 corpus doctor --config .\my-review\acquisition.local.toml
 & .\scripts\run.ps1 corpus convert --config .\my-review\acquisition.local.toml --profile benchmark
@@ -124,6 +127,8 @@ python scripts/corpus_tool.py self-test
 - manifest、质量报告和 OCR 重试队列：支持断点续作与审计。
 
 默认 `enable_remote_services=false`，论文内容不会发送到远程 Docling 服务。`benchmark` 用于小样本检查；`base` 用于常规批处理；`force-ocr` 只处理质量报告建议重试的 PDF；`accurate` 用于经选择的小型高精度批次。
+
+普通 `corpus self-test` 只检查合成 JATS。可选的 `--pdf` 会再转换一页临时合成 PDF，用来确认本机 PDF 模型链路；首次运行可能下载本地模型权重，但不会读取或上传用户论文。它是正式 benchmark 前的环境 smoke，不代替真实论文小样本检查。
 
 这一阶段只建立语料，不回答“用了什么设备”“研究区在哪里”等综述问题。详细步骤见[语料准备工作流](references/corpus-preparation.md)。
 
@@ -161,6 +166,7 @@ python scripts/corpus_tool.py self-test
 | `import` | 验证并复制人工取得的 PDF，不删原件 | 否 |
 | `privacy-scan` | 检查敏感文件和疑似密钥，不打印命中值 | 否 |
 | `corpus self-test` | 用合成 JATS 检查本地 Docling 环境 | 否 |
+| `corpus self-test --pdf` | 用一页合成 PDF 检查本地模型链路 | 否* |
 | `corpus register` | 从全文审计生成稳定语料注册表 | 否 |
 | `corpus doctor` | 检查 Docling、模型与磁盘空间 | 否 |
 | `corpus convert` | 生成 JSON、Markdown 和定位证据块 | 否* |

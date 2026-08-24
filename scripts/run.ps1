@@ -36,5 +36,5 @@ if (-not (Test-Path -LiteralPath $SelectedScript -PathType Leaf)) {
     throw "The requested Skill entrypoint is missing: $([System.IO.Path]::GetFileName($SelectedScript))"
 }
 
-& $VenvPython $SelectedScript @ToolArguments
+& $VenvPython -B $SelectedScript @ToolArguments
 exit $LASTEXITCODE

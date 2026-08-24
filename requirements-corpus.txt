@@ -1,4 +1,5 @@
 # Optional local corpus preparation. Install with: .\scripts\bootstrap.ps1 -Corpus
 docling-slim[format-pdf,format-xml-jats,models-local,feat-ocr-rapidocr]>=2.81,<3
+onnxruntime>=1.20,<2
 pypdfium2>=4.30
 scipy>=1.13,<2

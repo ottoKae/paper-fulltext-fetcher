@@ -12,6 +12,8 @@ from argparse import Namespace
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from pypdf import PdfReader
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -104,12 +106,22 @@ def registry_row(runtime: object, source: Path, source_format: str = "pdf", stud
 
 class CorpusToolTests(unittest.TestCase):
     def test_version_and_parser_expose_corpus_commands(self) -> None:
-        self.assertEqual(corpus_tool.VERSION, "0.3.0")
+        self.assertEqual(corpus_tool.VERSION, "0.3.1")
         parser = corpus_tool.build_parser()
         args = parser.parse_args(["status", "--config", "example.toml"])
         self.assertEqual(args.command, "status")
         args = parser.parse_args(["self-test"])
         self.assertEqual(args.command, "self-test")
+        self.assertFalse(args.pdf)
+        args = parser.parse_args(["self-test", "--pdf"])
+        self.assertTrue(args.pdf)
+
+    def test_synthetic_pdf_is_one_page_with_searchable_text(self) -> None:
+        payload = corpus_tool.synthetic_text_pdf("Corpus PDF self test")
+        self.assertTrue(payload.startswith(b"%PDF-1.4"))
+        reader = PdfReader(io.BytesIO(payload))
+        self.assertEqual(len(reader.pages), 1)
+        self.assertIn("Corpus PDF self test", reader.pages[0].extract_text())
 
     def test_runtime_rejects_outputs_outside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

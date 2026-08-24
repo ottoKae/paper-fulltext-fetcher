@@ -47,7 +47,7 @@ except ModuleNotFoundError:
     PdfReader = None
 
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 STOP_HTTP = {403, 418, 429}
 SUCCESS_STATUSES = {"valid_pdf", "valid_xml", "visual_approved_pdf", "already_present"}
 APPROVED_FETCH_SCOPES = {"open_access", "institutional_repository", "official_api"}
