@@ -1,0 +1,2 @@
+record_id,excel_row,title,doi,year,publisher,expected_filename,doi_landing,recommended_route,manual_status
+demo-001,2,Synthetic UAV surface reconstruction study,10.5555/example.001,2024,Example Publisher,demo-001_synthetic-uav-surface-reconstruction-study.pdf,https://doi.org/10.5555/example.001,Open repository or library service,pending

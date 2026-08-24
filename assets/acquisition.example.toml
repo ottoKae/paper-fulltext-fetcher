@@ -1,0 +1,46 @@
+[project]
+input = "bibliography.xlsx"
+# sheet = "Records"
+pdf_dir = "papers_pdf"
+xml_dir = "papers_xml"
+output_root = "outputs/acquisition"
+manual_inbox = "manual_pdf_inbox"
+
+# Uncomment only in your private acquisition.local.toml when source headers
+# are not recognized automatically.
+# [columns]
+# title = "Research Name"
+# doi = "Persistent Identifier"
+# year = "Release Year"
+# publisher = "Publisher Name"
+
+[identity]
+minimum_pdf_bytes = 10000
+require_pdf_magic = true
+require_title_or_doi_match = true
+accept_xml_only_as_fulltext = true
+
+[network]
+global_concurrency = 1
+per_host_concurrency = 1
+default_delay_seconds = 5.0
+browser_delay_min_seconds = 60.0
+browser_delay_max_seconds = 90.0
+max_consecutive_failures = 2
+stop_http_statuses = [403, 418, 429]
+
+[logging]
+events_format = "jsonl"
+manifest_format = "csv"
+redact_secrets = true
+redact_url_query = true
+resume = true
+
+[credentials]
+unpaywall_email_env = "UNPAYWALL_EMAIL"
+openalex_api_key_env = "OPENALEX_API_KEY"
+elsevier_api_key_env = "ELSEVIER_API_KEY"
+elsevier_inst_token_env = "ELSEVIER_INST_TOKEN"
+elsevier_journals_client_id_env = "ELSEVIER_JOURNALS_CLIENT_ID"
+elsevier_journals_client_secret_env = "ELSEVIER_JOURNALS_CLIENT_SECRET"
+wiley_tdm_token_env = "TDM_API_TOKEN"
