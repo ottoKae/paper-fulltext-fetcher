@@ -35,6 +35,7 @@ papers_xml/
 manual_pdf_inbox/
 downloads/
 outputs/
+corpus/
 quarantine/
 *.pdf
 *.xml

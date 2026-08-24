@@ -1,6 +1,6 @@
 # Paper Fulltext Fetcher
 
-一个给 Codex 使用的论文全文下载助手：从书目清单出发，优先寻找合法开放全文，也能接入出版社 API/TDM、已登录的可见浏览器和人工补录；每一步都保留状态，并验证下载到的文件是不是目标论文。
+一个给 Codex 使用的论文全文下载与语料准备助手：从书目清单出发，合法获取并验证 PDF/XML；需要时，再把全文转换成可搜索、可定位、可审计的本地语料。
 
 它不会绕过付费墙、验证码、访问限制或出版社条款。
 
@@ -12,6 +12,7 @@
 - 已下载一部分，想跳过已有文件并继续处理缺失项；
 - 可以使用开放获取、学校订阅、出版社 API/TDM 或人工下载；
 - 希望保留来源、失败原因和验证结果，方便复查。
+- 想把 PDF/JATS XML 转成 Docling JSON、Markdown 和带页码或 XPath 的证据块。
 
 不太适合这些情况：
 
@@ -66,6 +67,20 @@ python scripts/paper_fulltext_fetcher.py self-test
 python -m pip install -r requirements.txt
 ```
 
+只有需要语料结构化时，才安装较大的 Docling/OCR 依赖：
+
+```powershell
+& .\scripts\bootstrap.ps1 -Corpus
+& .\scripts\run.ps1 corpus self-test
+```
+
+macOS/Linux 对应命令是：
+
+```bash
+python -m pip install -r requirements-corpus.txt
+python scripts/corpus_tool.py self-test
+```
+
 ## 它怎样完成任务
 
 1. **检查书目**：识别 DOI、标题、年份等字段，但不在终端打印真实书目内容。
@@ -73,6 +88,7 @@ python -m pip install -r requirements.txt
 3. **逐级发现**：优先开放获取与机构知识库，再考虑获准的出版社 API/TDM。
 4. **谨慎获取**：默认串行、限速、断点续作；浏览器与人工步骤保持可见、可停止。
 5. **验证与留痕**：检查文件容器、页数、标题/DOI线索，记录来源、状态和失败原因。
+6. **可选语料准备**：把已经验证的全文在本地转换成结构化 JSON、Markdown 和证据块；不做综述变量判断。
 
 推荐顺序是：
 
@@ -85,6 +101,31 @@ python -m pip install -r requirements.txt
 ```
 
 每一层只处理上一层仍缺失的记录。这样既节省时间，也减少对出版社网站的重复请求。
+
+## 可选：把全文变成可检索语料
+
+先完成全文审计，再执行：
+
+```powershell
+& .\scripts\run.ps1 corpus self-test
+& .\scripts\run.ps1 corpus register --config .\my-review\acquisition.local.toml
+& .\scripts\run.ps1 corpus doctor --config .\my-review\acquisition.local.toml
+& .\scripts\run.ps1 corpus convert --config .\my-review\acquisition.local.toml --profile benchmark
+& .\scripts\run.ps1 corpus convert --config .\my-review\acquisition.local.toml --profile base --resume
+& .\scripts\run.ps1 corpus assess --config .\my-review\acquisition.local.toml --profile base
+& .\scripts\run.ps1 corpus verify --config .\my-review\acquisition.local.toml --profile base
+```
+
+原始 PDF/XML 保持不变。派生结果写入项目自己的 `corpus/`：
+
+- Docling JSON：机器可复查的主记录；
+- Markdown：便于人工阅读；
+- JSONL chunks：带 `study_id`、来源哈希、页码/bbox 或 XML XPath；
+- manifest、质量报告和 OCR 重试队列：支持断点续作与审计。
+
+默认 `enable_remote_services=false`，论文内容不会发送到远程 Docling 服务。`benchmark` 用于小样本检查；`base` 用于常规批处理；`force-ocr` 只处理质量报告建议重试的 PDF；`accurate` 用于经选择的小型高精度批次。
+
+这一阶段只建立语料，不回答“用了什么设备”“研究区在哪里”等综述问题。详细步骤见[语料准备工作流](references/corpus-preparation.md)。
 
 ## 828 篇论文实践告诉我们的事
 
@@ -119,6 +160,16 @@ python -m pip install -r requirements.txt
 | `manual-queue` | 生成 CSV/HTML 人工处理队列 | 否 |
 | `import` | 验证并复制人工取得的 PDF，不删原件 | 否 |
 | `privacy-scan` | 检查敏感文件和疑似密钥，不打印命中值 | 否 |
+| `corpus self-test` | 用合成 JATS 检查本地 Docling 环境 | 否 |
+| `corpus register` | 从全文审计生成稳定语料注册表 | 否 |
+| `corpus doctor` | 检查 Docling、模型与磁盘空间 | 否 |
+| `corpus convert` | 生成 JSON、Markdown 和定位证据块 | 否* |
+| `corpus chunk` | 不重跑解析器，生成新参数版本的证据块 | 否 |
+| `corpus assess` | 评估文本质量并生成 OCR 重试队列 | 否 |
+| `corpus verify` | 校验来源、派生文件、定位器和哈希 | 否 |
+| `corpus status` | 查看紧凑的结构化进度 | 否 |
+
+\* 转换本身在本地进行；首次准备模型可能需要联网下载模型文件，不会上传论文内容。
 
 需要更多参数时运行：
 
@@ -126,6 +177,7 @@ python -m pip install -r requirements.txt
 & .\scripts\run.ps1 audit --help
 & .\scripts\run.ps1 discover-oa --help
 & .\scripts\run.ps1 fetch-verified --help
+& .\scripts\run.ps1 corpus --help
 ```
 
 ## 什么情况下效果好
@@ -162,6 +214,7 @@ CARSI 或学校图书馆登录证明“你是机构的合法用户，可以阅�
 - Cookie、浏览器用户目录和登录会话；
 - API Key、TDM Token、邮箱及校园网信息；
 - 下载日志、失败队列和本地绝对路径。
+- 含论文正文的 Docling JSON、Markdown、chunks 和质量产物。
 
 密钥只通过环境变量或本地私有配置提供。提交前运行：
 
@@ -179,10 +232,12 @@ CARSI 或学校图书馆登录证明“你是机构的合法用户，可以阅�
 - [状态、日志与失败原因](references/status-and-logs.md)
 - [人工下载和安全导入](references/manual-import.md)
 - [隐私与发布检查](references/privacy-and-publication.md)
+- [语料准备工作流](references/corpus-preparation.md)
+- [语料注册表与证据块字段](references/corpus-schema.md)
 
 ## 使用边界
 
-本项目只帮助获取使用者依法有权访问的学术全文。它不绕过付费墙、验证码、机器人检查、访问暂停、机构订阅限制或出版社技术措施，也不保证所有书目都能获得 PDF。
+本项目只帮助获取使用者依法有权访问的学术全文，并在本地准备可审计语料。它不绕过付费墙、验证码、机器人检查、访问暂停、机构订阅限制或出版社技术措施，也不从论文中判断、汇总或解释具体综述变量。
 
 ## License
 

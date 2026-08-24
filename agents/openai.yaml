@@ -1,4 +1,4 @@
 interface:
   display_name: "Paper Fulltext Fetcher"
-  short_description: "合法低频地发现、下载、验证并审计论文 PDF 和全文 XML"
-  default_prompt: "Use $paper-fulltext-fetcher to safely download and validate scholarly full text from a bibliography."
+  short_description: "合法获取、验证全文，并可选生成本地可审计语料"
+  default_prompt: "Use $paper-fulltext-fetcher to safely acquire and validate scholarly full text, then optionally prepare a local searchable corpus."

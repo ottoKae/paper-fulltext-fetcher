@@ -1,21 +1,22 @@
 ---
 name: paper-fulltext-fetcher
-description: Safely find, download, validate, and audit scholarly PDF or full-text XML from bibliography lists using open sources, licensed publisher API/TDM access, authenticated visible browser sessions, and manual imports. Use for literature-download workflows, resumable queues, PDF/XML identity checks, or download reports. Do not use to bypass paywalls, bot controls, access suspensions, or publisher restrictions.
+description: Safely find, download, validate, and audit scholarly PDF or full-text XML, then optionally prepare verified local PDF/JATS XML as searchable Docling JSON, Markdown, and provenance-preserving chunks. Use for literature acquisition, resumable queues, identity checks, download reports, or local corpus structuring. Do not use to bypass access controls or to infer review variables from papers.
 ---
 
 # Paper Fulltext Fetcher
 
-Build a lawful, privacy-preserving and auditable path from a bibliography to downloaded, verified PDF or full-text XML. Treat downloading as a permissioned workflow, not as unrestricted scraping.
+Build a lawful, privacy-preserving and auditable path from a bibliography to verified full text and, when requested, a local structured corpus. Treat downloading as a permissioned workflow and corpus preparation as document parsing, not semantic review extraction.
 
 ## Operating modes
 
 Choose the smallest mode that satisfies the request:
 
 1. **Plan or diagnose:** inspect inputs, existing files, configuration and logs without changing external state.
-2. **Offline corpus work:** inventory, validate, prepare queues, import user-supplied files, audit or report.
-3. **Open discovery:** query OA metadata services after the user authorizes network access.
-4. **Official API/TDM:** use only credentials and entitlements the user has explicitly configured.
-5. **Visible browser assistance:** attach only to a user-opened, user-authenticated session; never automate credentials or challenges.
+2. **Offline acquisition work:** inventory, validate, prepare queues, import user-supplied files, audit or report.
+3. **Local corpus preparation:** register verified sources, run Docling locally, create locatable chunks, assess quality, retry selected OCR cases and verify hashes.
+4. **Open discovery:** query OA metadata services after the user authorizes network access.
+5. **Official API/TDM:** use only credentials and entitlements the user has explicitly configured.
+6. **Visible browser assistance:** attach only to a user-opened, user-authenticated session; never automate credentials or challenges.
 
 Do not infer authorization for network retrieval from a request to review, plan, audit or configure.
 
@@ -31,6 +32,8 @@ Do not infer authorization for network retrieval from a request to review, plan,
 8. Import into the corpus only after container and identity validation.
 9. Re-audit after every acquisition or manual-import batch.
 
+For optional corpus preparation, require a current acquisition audit, keep source PDF/XML immutable, register sources with stable IDs and SHA-256, run a small benchmark before a batch, use selective OCR after quality assessment, and verify every derived output before downstream retrieval. This stage must not classify study scope, equipment, methods, locations or other review variables.
+
 Read [references/workflow.md](references/workflow.md) when planning or operating the end-to-end pipeline. Read only the other reference relevant to the current mode:
 
 - Network, campus IP, CARSI and TDM: [references/network-and-auth.md](references/network-and-auth.md)
@@ -38,6 +41,8 @@ Read [references/workflow.md](references/workflow.md) when planning or operating
 - Statuses, evidence and audit fields: [references/status-and-logs.md](references/status-and-logs.md)
 - Manual and image-only PDF import: [references/manual-import.md](references/manual-import.md)
 - Privacy and GitHub publication: [references/privacy-and-publication.md](references/privacy-and-publication.md)
+- Local Docling conversion, OCR profiles and stage boundaries: [references/corpus-preparation.md](references/corpus-preparation.md)
+- Registry, manifest and evidence-chunk fields: [references/corpus-schema.md](references/corpus-schema.md)
 
 ## Privacy invariants
 
@@ -46,6 +51,7 @@ Read [references/workflow.md](references/workflow.md) when planning or operating
 - Use relative or user-supplied paths in reusable artifacts; do not embed usernames or machine-specific roots.
 - Persist only relative paths or basenames in shareable audit and event logs.
 - Do not place copyrighted PDF/XML files, acquisition logs, browser artifacts or real bibliography data in a public Skill repository.
+- Treat derived Docling JSON, Markdown, chunks and source maps as copyrighted corpus content; keep them in the user's ignored project workspace.
 - Use synthetic fixtures for tests and examples.
 - Run the privacy scanner before recommending Git publication.
 
@@ -65,6 +71,16 @@ Use `scripts/run.ps1` on Windows so every command runs in the Skill's private `.
 & scripts/run.ps1 inspect-input --config my-review/acquisition.local.toml
 ```
 
-On macOS or Linux, create `.venv`, install `requirements.txt`, and invoke `.venv/bin/python scripts/paper_fulltext_fetcher.py ...`.
+For local corpus preparation, install the optional environment and start with:
+
+```powershell
+& scripts/bootstrap.ps1 -Corpus
+& scripts/run.ps1 corpus self-test
+& scripts/run.ps1 corpus register --config my-review/acquisition.local.toml
+& scripts/run.ps1 corpus doctor --config my-review/acquisition.local.toml
+& scripts/run.ps1 corpus convert --config my-review/acquisition.local.toml --profile benchmark
+```
+
+On macOS or Linux, create `.venv`, install `requirements.txt`, and invoke `.venv/bin/python scripts/paper_fulltext_fetcher.py ...`. For corpus work, additionally install `requirements-corpus.txt` and invoke `.venv/bin/python scripts/corpus_tool.py ...`.
 
 Prefer `--dry-run` where available. Before any network command, state the hosts, record count, delay, output location and stopping conditions. Do not run a network command merely because credentials are present.

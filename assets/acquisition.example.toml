@@ -36,6 +36,24 @@ redact_secrets = true
 redact_url_query = true
 resume = true
 
+[corpus]
+# Optional local PDF/JATS XML structuring. Derived text stays inside the project.
+root = "corpus"
+registry = "corpus/registry.csv"
+runs_root = "outputs/corpus"
+ocr_languages = ["english"]
+target_chars = 2800
+max_chars = 3600
+
+[corpus_quality]
+min_total_chars = 3000
+low_page_chars = 100
+max_low_text_page_ratio = 0.35
+max_replacement_ratio = 0.005
+min_printable_ratio = 0.98
+max_repeated_line_ratio = 0.15
+min_title_token_coverage = 0.45
+
 [credentials]
 unpaywall_email_env = "UNPAYWALL_EMAIL"
 openalex_api_key_env = "OPENALEX_API_KEY"

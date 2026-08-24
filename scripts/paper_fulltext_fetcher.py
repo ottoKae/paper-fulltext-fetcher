@@ -47,7 +47,7 @@ except ModuleNotFoundError:
     PdfReader = None
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 STOP_HTTP = {403, 418, 429}
 SUCCESS_STATUSES = {"valid_pdf", "valid_xml", "visual_approved_pdf", "already_present"}
 APPROVED_FETCH_SCOPES = {"open_access", "institutional_repository", "official_api"}
@@ -55,6 +55,7 @@ WORKSPACE_GITIGNORE = """acquisition.local.toml
 .env
 papers_pdf/
 papers_xml/
+corpus/
 manual_pdf_inbox/
 outputs/
 *.jsonl
