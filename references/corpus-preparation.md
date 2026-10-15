@@ -74,6 +74,8 @@ benchmark 从不同文件大小和格式中确定性选择少量来源。先检�
 
 `--resume` 只有在来源哈希、配置哈希、全部派生文件和派生文件哈希都一致时才跳过论文。改变 OCR、表格或切块配置不会静默复用旧结果。
 
+输出按唯一 run ID 隔离，重跑不覆盖旧派生文件；已有 run/output 目录拒绝复用。XML 恢复额外校验标准化 JATS 和 XPath source map。重切块也保留独立运行实体。每次变更前后仍须冻结原文、审计、配置、registry、manifest 和批准视图；同一工作区不要并发启动多个写入命令。
+
 可使用 `--workers 1..4`。先从 1 开始；模型内存充足且 benchmark 稳定后再增加。每个 worker 都加载独立的 Docling 转换器。
 
 ### 5. 质量评估和选择性 OCR
@@ -116,6 +118,7 @@ benchmark 从不同文件大小和格式中确定性选择少量来源。先检�
 
 ## JATS XML
 
+- 对通过安全标准化的 JATS 显式选择 Docling `XML_JATS` 后端，避免 `table-model="xhtml"` 等声明使格式探测误判；保留原始 XML 和配置哈希。
 - 支持原生 `<article>` 和 OAI-PMH 包裹且只含一个 `<article>` 的 JATS；
 - 原文件保持不变，标准化副本写入派生目录；
 - 不保留来源外部 DTD；派生副本只加入 Docling 识别所需、无 URL 且无实体的 JATS DOCTYPE 标记，并拒绝源 XML entity 声明；
@@ -130,6 +133,7 @@ root = "corpus"
 registry = "corpus/registry.csv"
 runs_root = "outputs/corpus"
 ocr_languages = ["english"]
+pdf_backend = "default"
 target_chars = 2800
 max_chars = 3600
 
@@ -144,5 +148,7 @@ min_title_token_coverage = 0.45
 ```
 
 短论文、摘要集或非英文语料可能需要调整质量阈值。修改配置后应保留新配置哈希并重新验证。
+
+如果质量检查发现源PDF页数与转换页数不一致，先比较原文，不能把缺页结果视为完整结构化。可在同工作区的新配置文件中将`[corpus].pdf_backend`设为`"pypdfium2"`，通过`--selection`仅重跑有问题的论文。它只切换Docling的PDF读取后端，仍使用本地Docling/OCR/表格流程，不修改源PDF。后端名称进入转换配置哈希；重跑须使用新run ID，并重新assess、verify及核对页数。`default`保留Docling默认后端；其他值会被拒绝。
 
 OCR 语言名由具体引擎定义。RapidOCR 的语言/模型选择在不同版本间仍有差异；默认 `english` 延续本工具验证过的配置。需要其他语言时，应先在 benchmark 中确认相应模型，而不要直接对全量语料运行。

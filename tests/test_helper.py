@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from argparse import Namespace
@@ -14,6 +15,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "paper_fulltext_fetcher.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("paper_fulltext_fetcher", SCRIPT)
 assert SPEC and SPEC.loader
 helper = importlib.util.module_from_spec(SPEC)
@@ -21,6 +23,35 @@ SPEC.loader.exec_module(helper)
 
 
 class HelperTests(unittest.TestCase):
+    def test_pdf_identity_requires_ordered_title_when_doi_is_absent(self) -> None:
+        record = {"title": "Synthetic Satellite Plantation Evidence Validation Paper", "doi": "10.5555/target"}
+        unrelated = " ".join(reversed(record["title"].split()))
+        valid, detail = helper.pdf_identity(unrelated, record)
+        self.assertFalse(valid)
+        self.assertEqual(detail["title_coverage"], 1.0)
+        self.assertFalse(detail["title_phrase_match"])
+        self.assertTrue(helper.pdf_identity(record["title"], record)[0])
+
+    def test_pdf_identity_rejects_conflicting_doi_despite_title(self) -> None:
+        record = {"title": "Synthetic Satellite Plantation Evidence Validation Paper", "doi": "10.5555/target"}
+        valid, detail = helper.pdf_identity(record["title"] + " DOI: 10.5555/other", record)
+        self.assertFalse(valid)
+        self.assertTrue(detail["conflicting_doi"])
+
+    def test_pdf_title_phrase_handles_ligatures_linebreaks_and_hyphens(self) -> None:
+        record = {"title": "Efficient satellite mapping of short-rotation forest plantations", "doi": ""}
+        valid, detail = helper.pdf_identity("Efﬁcient satellite mapping of short\nrotation forest plantations", record)
+        self.assertTrue(valid)
+        self.assertTrue(detail["title_phrase_match"])
+
+    def test_pdf_identity_normalizes_typographic_doi_hyphens(self) -> None:
+        record = {"title": "Synthetic Satellite Plantation Evidence Validation Paper", "doi": "10.5555/example-2025-001"}
+        text = record["title"] + " DOI: 10.5555/\nexample‑2025‐001"
+        valid, detail = helper.pdf_identity(text, record)
+        self.assertTrue(valid)
+        self.assertTrue(detail["doi_in_front"])
+        self.assertFalse(detail["conflicting_doi"])
+
     def test_clean_doi(self) -> None:
         self.assertEqual(helper.clean_doi("https://doi.org/10.5555/Example.001?x=1"), "10.5555/example.001")
 

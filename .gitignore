@@ -39,3 +39,5 @@ corpus/
 quarantine/
 *.pdf
 *.xml
+dist/
+validation_runs/

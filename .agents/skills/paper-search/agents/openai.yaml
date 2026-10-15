@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Search"
+  short_description: "制定主题检索策略，保存数据库检索证据、原始导出和可追溯书目"
+  default_prompt: "Use $paper-search to build a reproducible search strategy and register my database exports."

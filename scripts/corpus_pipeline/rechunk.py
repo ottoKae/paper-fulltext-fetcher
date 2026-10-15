@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .chunks import build_chunks, docling_parts, jats_parts, write_chunks
 from .common import (
@@ -23,6 +24,7 @@ from .engine import corpus_settings
 
 
 CHUNK_MANIFEST_FIELDS = [
+    "run_id",
     "study_id",
     "profile",
     "source_sha256",
@@ -63,7 +65,8 @@ def run_rechunk(
         "max_chars": maximum,
     }
     chunk_digest = config_sha256(chunk_spec)
-    output_dir = runtime.corpus_root / "chunk_sets" / chunk_digest[:8]
+    run_id = f"rechunk-{uuid4().hex}"
+    output_dir = runtime.corpus_root / "chunk_sets" / chunk_digest[:8] / run_id
     registry = load_registry(runtime.registry)
     if study_id:
         registry = [row for row in registry if row["study_id"] == study_id]
@@ -73,10 +76,12 @@ def run_rechunk(
     if not conversion_manifest.is_file():
         raise FileNotFoundError("conversion manifest was not found")
     selected = latest_success(read_csv(conversion_manifest), profile)
+    output_dir.mkdir(parents=True, exist_ok=False)
     rows: list[dict[str, Any]] = []
     for record in registry:
         manifest = selected.get(record["study_id"])
         row: dict[str, Any] = {
+            "run_id": run_id,
             "study_id": record["study_id"],
             "profile": profile,
             "source_sha256": record["source_sha256"],
@@ -85,6 +90,10 @@ def run_rechunk(
         try:
             if not manifest:
                 raise ValueError("no successful conversion for this profile")
+            if manifest.get("source_sha256") != record["source_sha256"]:
+                raise ValueError("conversion source does not match the current registry")
+            if sha256_file(runtime.workspace / record["source_relpath"]) != record["source_sha256"]:
+                raise ValueError("registered source hash mismatch")
             json_path = runtime.workspace / manifest["json_relpath"]
             json_digest = sha256_file(json_path)
             if json_digest != manifest["json_sha256"]:
@@ -93,6 +102,8 @@ def run_rechunk(
                 source_map = runtime.workspace / manifest.get("source_map_relpath", "")
                 if not source_map.is_file():
                     raise FileNotFoundError("XML XPath source map is missing")
+                if sha256_file(source_map) != manifest.get("source_map_sha256"):
+                    raise ValueError("XML XPath source map hash mismatch")
                 parts = jats_parts(_read_jsonl(source_map))
             else:
                 try:
@@ -133,9 +144,11 @@ def run_rechunk(
             )
         rows.append(row)
     manifest_path = runtime.corpus_root / "manifests" / f"chunk_manifest_{chunk_digest[:8]}.csv"
+    atomic_write_csv(output_dir / "manifest.csv", rows, CHUNK_MANIFEST_FIELDS)
     atomic_write_csv(manifest_path, rows, CHUNK_MANIFEST_FIELDS)
     counts = Counter(str(row["status"]) for row in rows)
     summary = {
+        "run_id": run_id,
         "created_utc": utc_now(),
         "profile": profile,
         "chunk_config": chunk_spec,

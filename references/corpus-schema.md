@@ -70,15 +70,19 @@ corpus/
 │  ├─ preflight.json
 │  ├─ conversion_manifest.csv
 │  └─ chunk_manifest_<hash>.csv
-├─ derived/<profile>/<config-hash>/
+├─ derived/<profile>/<config-hash>/<run_id>/
 │  ├─ docling_json/
 │  ├─ markdown/
 │  ├─ chunks/
 │  ├─ jats/
 │  └─ source_maps/
-├─ chunk_sets/<chunk-config-hash>/
+├─ chunk_sets/<chunk-config-hash>/<rechunk-run-id>/
 ├─ quality/
 └─ verification/
 ```
 
 `outputs/corpus/runs/<run_id>/` 保存每次运行的命令摘要、环境、events、checkpoint、成功、失败、重试队列和 summary。所有路径均应保持为相对路径或文件名。
+
+每次转换还保存 registry、配置和 selection 实体副本，已有 run/output 目录不可复用。manifest 新增 `conversion_source_sha256`；旧表头不匹配时拒绝追加，须先归档并显式迁移，不可删除历史清单。重切块目录包含该运行的独立 manifest，顶层 chunk manifest 仅是可覆盖的最新视图。
+
+chunk ID 只在对应文件版本内唯一。下游引用应同时保存来源 ID/哈希、run/config、chunks 文件哈希及定位器。源全文、配置、审计与批准视图仍须由私有项目冻结实体；本工具的运行隔离不等于灾备或操作系统不可变存储。

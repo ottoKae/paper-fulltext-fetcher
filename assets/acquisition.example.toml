@@ -21,13 +21,23 @@ require_title_or_doi_match = true
 accept_xml_only_as_fulltext = true
 
 [network]
+publisher_domains = []
 global_concurrency = 1
 per_host_concurrency = 1
 default_delay_seconds = 5.0
 browser_delay_min_seconds = 60.0
 browser_delay_max_seconds = 90.0
 max_consecutive_failures = 2
-stop_http_statuses = [403, 418, 429]
+stop_http_statuses = [401, 403, 418, 429]
+
+[institution]
+domains = []
+authentication_domains = []
+network_mode = "unspecified"
+
+[browser]
+downloads_dir = "manual_pdf_inbox"
+cdp_endpoint = ""
 
 [logging]
 events_format = "jsonl"

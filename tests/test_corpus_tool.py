@@ -33,6 +33,10 @@ from corpus_pipeline.common import (  # noqa: E402
 from corpus_pipeline.engine import (  # noqa: E402
     MANIFEST_FIELDS,
     benchmark_records,
+    corpus_settings,
+    convert_validated_jats,
+    make_converter,
+    output_directories,
     profile_spec,
     successful_resume,
 )
@@ -215,6 +219,28 @@ class CorpusToolTests(unittest.TestCase):
             self.assertNotIn("<!ENTITY", prepared)
             self.assertTrue(source_map.exists())
 
+    @unittest.skipUnless(importlib.util.find_spec("docling"), "optional Docling dependency")
+    def test_validated_jats_with_xhtml_table_model_uses_jats_backend(self) -> None:
+        from docling.datamodel.base_models import ConversionStatus, InputFormat
+        from docling.document_converter import DocumentConverter
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.xml"
+            source.write_text(
+                '<article><processing-meta table-model="xhtml"/>'
+                '<front><article-meta><title-group><article-title>Synthetic JATS</article-title>'
+                '</title-group></article-meta></front><body><sec><title>Methods</title>'
+                '<p>Preserved synthetic evidence.</p></sec></body></article>',
+                encoding="utf-8",
+            )
+            target, _, _ = prepare_jats(source, root / "prepared.nxml")
+            converter = DocumentConverter(allowed_formats=[InputFormat.XML_JATS])
+            result = convert_validated_jats(converter, target)
+            self.assertEqual(result.status, ConversionStatus.SUCCESS)
+            self.assertIn("Preserved synthetic evidence.", result.document.export_to_markdown())
+            self.assertIn('table-model="xhtml"', target.read_text(encoding="utf-8"))
+
     def test_jats_rejects_entity_declarations(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -265,6 +291,58 @@ class CorpusToolTests(unittest.TestCase):
         self.assertEqual(public["table_extraction"], "disabled")
         self.assertIsNone(private["artifacts_path"])
 
+    def test_conversion_outputs_are_isolated_by_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _, runtime = make_workspace(Path(temp))
+            first = output_directories(runtime, "base", "12345678", "run-1")
+            second = output_directories(runtime, "base", "12345678", "run-2")
+            self.assertTrue(all(first[key] != second[key] for key in first))
+            for unsafe in ("../outside", "run/name", "C:\\outside", "..", ""):
+                with self.assertRaises(ValueError):
+                    output_directories(runtime, "base", "12345678", unsafe)
+
+    def test_pdf_backend_is_validated_and_part_of_config_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _, runtime = make_workspace(Path(temp))
+            settings = corpus_settings(runtime)
+            self.assertEqual(settings["pdf_backend"], "default")
+            default, _ = profile_spec("base", threads=1, artifacts_path=None, settings=settings, no_tables=True)
+            runtime.config["corpus"]["pdf_backend"] = "pypdfium2"
+            fallback, _ = profile_spec("base", threads=1, artifacts_path=None, settings=corpus_settings(runtime), no_tables=True)
+            self.assertEqual(fallback["pdf_backend"], "pypdfium2")
+            self.assertNotEqual(config_sha256(default), config_sha256(fallback))
+            runtime.config["corpus"]["pdf_backend"] = "unknown"
+            with self.assertRaises(ValueError):
+                corpus_settings(runtime)
+            with self.assertRaises(ValueError):
+                profile_spec("base", threads=1, artifacts_path=None, settings={**settings, "pdf_backend": "unknown"}, no_tables=True)
+
+    @unittest.skipUnless(importlib.util.find_spec("docling"), "optional Docling dependency")
+    def test_pdfium_fallback_keeps_docling_pipeline_local(self) -> None:
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+        from docling.datamodel.base_models import InputFormat
+
+        _, spec = profile_spec("base", threads=1, artifacts_path=None, settings={"pdf_backend": "pypdfium2", "ocr_languages": ["en"], "target_chars": 2800, "max_chars": 3600}, no_tables=True)
+        converter = make_converter(spec)
+        options = converter.format_to_options[InputFormat.PDF]
+        self.assertIs(options.backend, PyPdfiumDocumentBackend)
+        self.assertFalse(options.pipeline_options.enable_remote_services)
+        self.assertFalse(options.pipeline_options.allow_external_plugins)
+
+    def test_xml_resume_requires_prepared_source_and_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            row = {"source_format": "xml", "status": "success", "source_sha256": "a", "config_sha256": "b"}
+            for prefix in ("json", "md", "chunks", "conversion_source", "source_map"):
+                target = root / prefix
+                target.write_text(prefix, encoding="utf-8")
+                row[prefix + "_relpath"] = prefix
+                row[prefix + "_sha256"] = sha256_file(target)
+            expected = {"source_sha256": "a", "config_sha256": "b"}
+            self.assertTrue(successful_resume(row, expected, root))
+            (root / "source_map").write_text("changed", encoding="utf-8")
+            self.assertFalse(successful_resume(row, expected, root))
+
     def test_benchmark_selection_handles_small_single_format_corpus(self) -> None:
         records = [{"study_id": f"p{index}", "source_format": "pdf", "source_bytes": str(index)} for index in range(1, 4)]
         selected = benchmark_records(records)
@@ -311,6 +389,12 @@ class CorpusToolTests(unittest.TestCase):
             code, summary = run_rechunk(runtime, profile="base", study_id=None, target_chars=200, max_chars=300)
             self.assertEqual(code, 0)
             self.assertEqual(summary["success"], 1)
+
+            first_files = {path: sha256_file(path) for path in (runtime.corpus_root / "chunk_sets").rglob("*") if path.is_file()}
+            code, repeated = run_rechunk(runtime, profile="base", study_id=None, target_chars=200, max_chars=300)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(summary["run_id"], repeated["run_id"])
+            self.assertTrue(all(sha256_file(path) == digest for path, digest in first_files.items()))
 
     def test_verify_and_status_accept_a_valid_synthetic_xml_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

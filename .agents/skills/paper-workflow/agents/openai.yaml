@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Workflow"
+  short_description: "串联论文检索、合法全文获取和本地结构化，按实际输入选择起点"
+  default_prompt: "Use $paper-workflow to establish my literature workspace and run only the stages I need."

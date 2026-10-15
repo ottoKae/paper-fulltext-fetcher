@@ -3,3 +3,4 @@ docling-slim[format-pdf,format-xml-jats,models-local,feat-ocr-rapidocr]>=2.81,<3
 onnxruntime>=1.20,<2
 pypdfium2>=4.30
 scipy>=1.13,<2
+rtree>=1.3,<2

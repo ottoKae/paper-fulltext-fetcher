@@ -23,6 +23,8 @@ import shutil
 import sys
 import tempfile
 import time
+import unicodedata
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,8 +49,8 @@ except ModuleNotFoundError:
     PdfReader = None
 
 
-VERSION = "0.3.1"
-STOP_HTTP = {403, 418, 429}
+VERSION = "0.4.0"
+STOP_HTTP = {401, 403, 418, 429}
 SUCCESS_STATUSES = {"valid_pdf", "valid_xml", "visual_approved_pdf", "already_present"}
 APPROVED_FETCH_SCOPES = {"open_access", "institutional_repository", "official_api"}
 WORKSPACE_GITIGNORE = """acquisition.local.toml
@@ -67,7 +69,7 @@ bibliography*.csv
 """
 TEXT_SUFFIXES = {
     ".csv", ".md", ".py", ".ps1", ".toml", ".yaml", ".yml", ".json",
-    ".txt", ".html", ".gitignore", ".ini", ".cfg",
+    ".txt", ".html", ".gitignore", ".ini", ".cfg", ".mjs", ".tsv",
 }
 RISKY_SUFFIXES = {".pdf", ".xml", ".har", ".jsonl", ".sqlite", ".sqlite3", ".xlsx", ".xlsm", ".key", ".token", ".pem", ".p12", ".pfx"}
 SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules"}
@@ -191,9 +193,9 @@ def read_table(path: Path, sheet_name: str | None = None) -> tuple[list[str], li
         raise FileNotFoundError(path)
     rows: list[dict[str, Any]] = []
     metadata: dict[str, Any] = {"input_type": path.suffix.casefold().lstrip("."), "sheet": "", "available_sheets": []}
-    if path.suffix.casefold() == ".csv":
+    if path.suffix.casefold() in {".csv", ".tsv"}:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
+            reader = csv.DictReader(handle, delimiter="\t" if path.suffix.casefold() == ".tsv" else ",")
             headers = list(reader.fieldnames or [])
             rows = list(reader)
     elif path.suffix.casefold() in {".xlsx", ".xlsm"}:
@@ -219,7 +221,7 @@ def read_table(path: Path, sheet_name: str | None = None) -> tuple[list[str], li
         rows = [dict(zip(headers, values)) for values in iterator]
         workbook.close()
     else:
-        raise ValueError("input must be .csv, .xlsx, or .xlsm")
+        raise ValueError("input must be .csv, .tsv, .xlsx, or .xlsm")
     return headers, rows, metadata
 
 
@@ -265,7 +267,7 @@ def redact_url(value: str) -> str:
         return ""
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return ""
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", ""))
 
 
 def redact_error_message(value: str) -> str:
@@ -279,6 +281,7 @@ def redact_error_message(value: str) -> str:
     text = re.sub(r"/(?:home|Users)/[^/\s'\"]+(?:/[^\s'\"]*)?", "<local-path>", text)
     text = re.sub(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "<email>", text)
     text = re.sub(r"(?i)([?&](?:token|signature|sig|key|auth|expires)=)[^&\s]+", r"\1<redacted>", text)
+    text = re.sub(r"(?i)([?&](?:x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))=)[^&\s]+", r"\1<redacted>", text)
     return text
 
 
@@ -307,6 +310,29 @@ def title_score(text: str, title: str) -> tuple[float, int]:
     return (len(matched) / len(wanted) if wanted else 0.0), len(matched)
 
 
+def pdf_identity(text: str, record: dict[str, str]) -> tuple[bool, dict[str, Any]]:
+    translation = str.maketrans({**dict.fromkeys("‐‑‒–—―−", "-"), "\u00ad": None})
+    normalized = unicodedata.normalize("NFKC", text).translate(translation).casefold()
+    title = unicodedata.normalize("NFKC", record["title"]).translate(translation).casefold()
+    compact = re.sub(r"\s+", "", normalized)
+    doi = unicodedata.normalize("NFKC", record["doi"]).translate(translation).casefold()
+    doi_match = bool(doi and doi in compact)
+    coverage, matches = title_score(normalized, title)
+    title_phrase = "".join(character for character in title if character.isalnum())
+    text_phrase = "".join(character for character in normalized if character.isalnum())
+    phrase_match = bool(title_phrase and title_phrase in text_phrase)
+    conflicting_doi = bool(doi and not doi_match and re.search(r"10\.\d{4,9}/", normalized))
+    valid = doi_match and (not title or coverage >= 0.8) or (
+        not conflicting_doi and phrase_match and coverage >= 0.95 and matches >= 5
+    )
+    return bool(valid), {
+        "doi_in_front": doi_match,
+        "title_coverage": coverage,
+        "title_phrase_match": phrase_match,
+        "conflicting_doi": conflicting_doi,
+    }
+
+
 def validate_pdf(path: Path, record: dict[str, str], minimum_bytes: int) -> tuple[bool, str, str]:
     if not path.exists():
         return False, "missing", ""
@@ -314,13 +340,12 @@ def validate_pdf(path: Path, record: dict[str, str], minimum_bytes: int) -> tupl
         return False, "below_minimum_bytes", ""
     if not read_prefix(path).lstrip().startswith(b"%PDF-"):
         return False, "invalid_pdf_signature", ""
-    text, parse_detail = pdf_text(path)
-    lowered = text.casefold()
-    doi = record["doi"]
-    if doi and doi in lowered:
+    text, parse_detail = pdf_text(path, max_pages=2)
+    valid, identity = pdf_identity(text, record)
+    coverage = identity["title_coverage"]
+    if valid and identity["doi_in_front"]:
         return True, f"doi_match;{parse_detail}", text
-    coverage, matches = title_score(text, record["title"]) if text else (0.0, 0)
-    if coverage >= 0.70 and matches >= 5:
+    if valid:
         return True, f"title_match={coverage:.2f};{parse_detail}", text
     return False, f"identity_mismatch:title={coverage:.2f};{parse_detail}", text
 
@@ -613,7 +638,14 @@ def command_audit(args: argparse.Namespace) -> int:
     args.xml_dir = configured_path(args, "xml_dir", "xml_dir")
     args.output_dir = configured_path(args, "output_dir", "output_root", default_relative="outputs/acquisition") / "audit" if args.output_dir is None else args.output_dir
     records = load_records(args.input, runtime_sheet(args), runtime_columns(args))
-    approvals = load_visual_approvals(args.visual_approvals)
+    config, base = load_runtime_config(getattr(args, "config", None))
+    approval_paths = list(args.visual_approvals)
+    for value in (config.get("identity") or {}).get("visual_approval_files", []):
+        path = resolve_local_path(str(value), base)
+        if not path.is_file():
+            raise ValueError("Configured visual approval evidence is missing")
+        approval_paths.append(path)
+    approvals = load_visual_approvals(approval_paths)
     rows, anomalies, summary = audit_records(records, args.pdf_dir, args.xml_dir, args.minimum_pdf_bytes, approvals)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.output_dir / "records.csv", rows)
@@ -730,10 +762,12 @@ def command_import(args: argparse.Namespace) -> int:
     wanted_excel_rows = {str(row.get("excel_row", "")) for row in remaining_rows if row.get("excel_row")}
     records = [
         record for record in all_records
-        if (not wanted_ids and not wanted_excel_rows)
-        or record["record_id"] in wanted_ids
+        if record["record_id"] in wanted_ids
         or record["excel_row"] in wanted_excel_rows
     ]
+    if not records:
+        print(json.dumps({"dry_run": args.dry_run, "files": 0, "status": {}, "reason": "no_requested_records"}))
+        return 0
     args.log_dir.mkdir(parents=True, exist_ok=True)
     events_path = args.log_dir / f"import_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
     results = []
@@ -749,15 +783,24 @@ def command_import(args: argparse.Namespace) -> int:
             destination = args.pdf_dir / record["expected_filename"]
             event.update(record_id=record["record_id"], excel_row=record["excel_row"], title=record["title"], destination=destination.name)
             if destination.exists():
-                event["status"] = "already_present"
+                existing_valid, existing_detail, _ = validate_pdf(destination, record, args.minimum_pdf_bytes)
+                event["status"] = "already_present" if existing_valid else "existing_invalid"
+                event["existing_validation"] = existing_detail
             elif args.dry_run:
                 event["status"] = "would_import"
             else:
                 args.pdf_dir.mkdir(parents=True, exist_ok=True)
-                temporary = destination.with_suffix(".pdf.part")
-                shutil.copy2(source, temporary)
-                temporary.replace(destination)
-                event.update(status="valid_pdf", bytes=destination.stat().st_size, sha256=sha256_file(destination))
+                temporary = destination.with_name(destination.name + "." + uuid.uuid4().hex + ".part")
+                try:
+                    source_hash = sha256_file(source)
+                    shutil.copy2(source, temporary)
+                    copied_valid, copied_detail, _ = validate_pdf(temporary, record, args.minimum_pdf_bytes)
+                    if not copied_valid or sha256_file(temporary) != source_hash or sha256_file(source) != source_hash:
+                        raise ValueError("Source changed or copied PDF validation failed; not imported")
+                    os.link(temporary, destination)
+                    event.update(status="valid_pdf", validation=copied_detail, bytes=destination.stat().st_size, sha256=source_hash)
+                finally:
+                    temporary.unlink(missing_ok=True)
         append_jsonl(events_path, event)
         results.append(event)
         print(f"{source.name}: {event['status']}")
@@ -890,20 +933,27 @@ def is_allowed_host(host: str, allowed_hosts: set[str]) -> bool:
 
 
 class RestrictedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, allowed_hosts: set[str]) -> None:
+    def __init__(self, allowed_hosts: set[str], route_ledger: Any = None, source_host: str = "") -> None:
         super().__init__()
         self.allowed_hosts = allowed_hosts
+        self.route_ledger = route_ledger
+        self.source_host = source_host
 
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
-        host = urllib.parse.urlsplit(newurl).hostname or ""
+        parsed = urllib.parse.urlsplit(newurl)
+        host = parsed.hostname or ""
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+            raise urllib.error.URLError("redirect_scheme_or_credentials_not_allowed")
         if not is_allowed_host(host, self.allowed_hosts):
             raise urllib.error.URLError("redirect_host_not_allowed")
+        if self.route_ledger and host != self.source_host and not self.route_ledger.state(host, "http")["attempt_allowed"]:
+            raise urllib.error.URLError("redirect_route_paused")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def download_one(url: str, temporary: Path, timeout: int, max_bytes: int, allowed_hosts: set[str]) -> tuple[int, str]:
+def download_one(url: str, temporary: Path, timeout: int, max_bytes: int, allowed_hosts: set[str], route_ledger: Any = None) -> tuple[int, str]:
     request = urllib.request.Request(url, headers={"User-Agent": "paper-fulltext-fetcher/0.1"})
-    opener = urllib.request.build_opener(RestrictedRedirectHandler(allowed_hosts))
+    opener = urllib.request.build_opener(RestrictedRedirectHandler(allowed_hosts, route_ledger, urllib.parse.urlsplit(url).hostname or ""))
     try:
         with opener.open(request, timeout=timeout) as response, temporary.open("wb") as handle:
             total = 0
@@ -917,12 +967,17 @@ def download_one(url: str, temporary: Path, timeout: int, max_bytes: int, allowe
                 handle.write(chunk)
             return response.status, str(response.headers.get("Content-Type", ""))
     except urllib.error.HTTPError as exc:
+        final_host = urllib.parse.urlsplit(exc.url).hostname
+        if route_ledger and final_host and final_host != urllib.parse.urlsplit(url).hostname:
+            route_ledger.record(final_host, "http", "rate_limited" if exc.code == 429 else "challenge_or_block" if exc.code in {401, 403, 418} else "network_error", http_status=exc.code)
         return exc.code, "http_error"
     except (urllib.error.URLError, TimeoutError):
         return 0, "network_error"
 
 
 def command_fetch_verified(args: argparse.Namespace) -> int:
+    from campus_support import RouteLedger
+
     args.manifest = configured_output_child(args, "manifest", "oa_candidates.csv")
     args.pdf_dir = configured_path(args, "pdf_dir", "pdf_dir")
     args.xml_dir = configured_path(args, "xml_dir", "xml_dir")
@@ -945,16 +1000,18 @@ def command_fetch_verified(args: argparse.Namespace) -> int:
         print("--execute requires at least one --allow-host", file=sys.stderr)
         return 2
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    event_path = args.log_dir / f"fetch_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    access_dir = configured_output_child(args, "access_dir", "access") if getattr(args, "config", None) else args.log_dir.parent / "access"
+    ledger = RouteLedger(access_dir)
+    event_path = args.log_dir / f"fetch_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.jsonl"
     status_counts: Counter[str] = Counter()
     consecutive_failures = 0
     stopped = False
-    for row in rows:
+    for row_index, row in enumerate(rows):
         url = row.get("candidate_url", "")
         parsed = urllib.parse.urlsplit(url)
         host = (parsed.hostname or "").casefold()
         event: dict[str, Any] = {"timestamp_utc": utcnow(), "action": "fetch_verified", "record_id": row.get("record_id", ""), "host": host, "source_url_redacted": redact_url(url)}
-        if parsed.scheme not in {"http", "https"} or not is_allowed_host(host, hosts):
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password or not is_allowed_host(host, hosts):
             event["status"] = "host_not_allowed"
         else:
             suffix = ".xml" if row.get("expected_filename", "").casefold().endswith(".xml") else ".pdf"
@@ -962,17 +1019,28 @@ def command_fetch_verified(args: argparse.Namespace) -> int:
             filename = row.get("expected_filename") or f"{row.get('record_id', 'download')}{suffix}"
             destination = destination_dir / Path(filename).name
             if destination.exists():
-                event["status"] = "already_present"
+                record = canonical_record(row, int(row.get("excel_row") or 2))
+                valid = validate_pdf(destination, record, args.minimum_pdf_bytes)[0] if suffix == ".pdf" else validate_xml(destination, record, args.minimum_pdf_bytes)[0]
+                event["status"] = "already_present" if valid else "existing_invalid"
+            elif not ledger.state(host, "http")["attempt_allowed"]:
+                event["status"] = "route_paused"
+                stopped = True
             else:
+                ledger.begin(host, "http")
                 args.log_dir.mkdir(parents=True, exist_ok=True)
                 temporary = args.log_dir / (destination.name + ".part")
-                http_status, detail = download_one(url, temporary, args.timeout, args.max_bytes, hosts)
+                http_status, detail = download_one(url, temporary, args.timeout, args.max_bytes, hosts, route_ledger=ledger)
                 event.update(http_status=http_status, transfer_detail=detail)
                 if http_status in STOP_HTTP:
                     event["status"] = "rate_limited" if http_status == 429 else "challenge_or_block"
                     stopped = True
                 elif http_status != 200 or not temporary.exists():
                     event["status"] = "network_error"
+                elif detail == "maximum_bytes_exceeded":
+                    event.update(status="invalid_container", validation=detail)
+                elif not read_prefix(temporary).lstrip().startswith(b"%PDF-") and re.search(r"security verification|verify you are human|captcha|access denied|request verification|just a moment|正在进行安全验证|请稍候", read_prefix(temporary, 32768).decode("utf-8", errors="ignore"), re.I):
+                    event["status"] = "challenge_or_block"
+                    stopped = True
                 else:
                     record = canonical_record(row, int(row.get("excel_row") or 2))
                     if suffix == ".pdf":
@@ -988,6 +1056,7 @@ def command_fetch_verified(args: argparse.Namespace) -> int:
                         event.update(status="valid_xml" if suffix == ".xml" else "valid_pdf", bytes=destination.stat().st_size, sha256=sha256_file(destination), output_file=destination.name)
                 if temporary.exists():
                     temporary.unlink()
+                ledger.record(host, "http", event["status"], record_id=event["record_id"], http_status=event.get("http_status", 0))
         append_jsonl(event_path, event)
         status_counts[event["status"]] += 1
         if event["status"] in SUCCESS_STATUSES:
@@ -997,7 +1066,8 @@ def command_fetch_verified(args: argparse.Namespace) -> int:
         if stopped or consecutive_failures >= args.max_consecutive_failures:
             stopped = True
             break
-        time.sleep(max(0.0, args.delay))
+        if row_index + 1 < len(rows):
+            time.sleep(max(0.0, args.delay))
     summary = {"finished_utc": utcnow(), "requested": len(rows), "status": dict(status_counts), "circuit_breaker_triggered": stopped, "events": event_path.name}
     write_json(args.log_dir / "summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1012,6 +1082,8 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
+    from campus_support import campus_diagnostics
+
     config = load_config(args.config)
     base = args.config.resolve().parent
     credential_names = list((config.get("credentials") or {}).values())
@@ -1038,15 +1110,12 @@ def command_doctor(args: argparse.Namespace) -> int:
         "project_ready": project_paths["input"]["exists"] and all(project_paths[key]["exists"] for key in ("pdf_dir", "xml_dir", "output_root", "manual_inbox")),
         "network_tested": False,
     }
-    if args.clash_config:
-        text = args.clash_config.read_text(encoding="utf-8", errors="ignore")
-        mode_match = re.search(r"(?m)^mode:\s*([^\s#]+)", text)
-        result["clash"] = {
-            "mode": mode_match.group(1) if mode_match else "unknown",
-            "openai_rule_present": bool(re.search(r"(?i)openai\.com|chatgpt\.com", text)),
-            "institution_direct_rule_present": bool(re.search(r"(?i)(?:whu\.edu\.cn|metaersp\.com).*,\s*DIRECT", text)),
-            "publisher_direct_rule_present": bool(re.search(r"(?i)(?:sciencedirect|tandfonline|ieee|wiley).*,\s*DIRECT", text)),
-        }
+    clash_text = args.clash_config.read_text(encoding="utf-8", errors="ignore") if args.clash_config else None
+    result["access_diagnostics"] = campus_diagnostics(config, base, clash_text)
+    if "clash" in result["access_diagnostics"]:
+        result["clash"] = result["access_diagnostics"]["clash"]
+    if getattr(args, "output", None):
+        write_json(args.output, result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     ok = result["environment_ready"]
     return 0 if ok else 2
@@ -1139,6 +1208,7 @@ def privacy_findings(root: Path) -> list[dict[str, Any]]:
         ("env_secret_assignment", re.compile(r"(?i)(?:\$env:|setx\s+)[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*(?:=|\s)\s*['\"](?!<|\$)[^'\"]{8,}")),
         ("authorization_value", re.compile(r"(?i)\b(?:Authorization|Cookie)\s*[:=]\s*['\"](?!<)[^'\"]{8,}")),
         ("signed_url", re.compile(r"(?i)https?://[^\s'\"]+[?&](?:token|signature|sig|key|auth|expires)=[^\s'\"&]+")),
+        ("cloud_signed_url", re.compile(r"(?i)https?://[^\s'\"]+[?&](?:x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))=[^\s'\"&]+")),
     ]
     for path in root.rglob("*"):
         try:
@@ -1207,6 +1277,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Check local dependencies and configured credential names without printing values")
     doctor.add_argument("--config", type=Path, default=skill_root() / "assets" / "acquisition.example.toml")
     doctor.add_argument("--clash-config", type=Path)
+    doctor.add_argument("--output", type=Path)
     doctor.set_defaults(function=command_doctor)
 
     self_test = sub.add_parser("self-test", help="Run an offline end-to-end check using synthetic data only")

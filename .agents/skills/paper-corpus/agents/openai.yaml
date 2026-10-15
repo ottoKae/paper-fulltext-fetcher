@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Corpus"
+  short_description: "将已验证全文转为带来源定位的本地结构化语料，并检查解析质量"
+  default_prompt: "Use $paper-corpus to structure my verified local papers with source locations and quality checks."

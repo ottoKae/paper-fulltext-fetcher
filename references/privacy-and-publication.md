@@ -38,3 +38,18 @@
 9. 用 Skill `quick_validate.py` 校验结构。
 
 如果秘密曾经提交到 Git，仅从工作树删除并不足够：应撤销/轮换秘密，并根据仓库情况清理历史。
+
+## 明确的发布清单
+
+`assets/bundle-files.json`逐个列出共享运行环境和公开源码文件。安装器不再递归收集脚本、参考资料和资产；未列入的私人辅助脚本不会被安装或打包。新增通用模块时必须审查后显式加入清单。
+
+```powershell
+& .\.venv\Scripts\python.exe .\scripts\release_tools.py check --history --output .\outputs\validation\publication-before-stage.json
+& .\.venv\Scripts\python.exe .\scripts\release_tools.py build --output-dir .\dist\public-candidate-001
+```
+
+审查差异并仅暂存明确批准的文件后，再使用`check --index --history`。该检查读取实际Git索引对象，拒绝未获准路径、符号链接、未解决冲突、未暂存的必要公开文件和索引/工作树内容差异；对当前可达历史中的文件对象做隐私扫描。不会提交、推送、改写历史、删除文件或轮换凭据。
+
+公共候选包只复制清单文件，核对源文件和副本SHA-256，并扫描包本身。只有临时构建目录通过检查后，才发布为指定输出目录；隐私检查失败不会留下可误用的目标发布包。报告不输出匹配的秘密原文；检查器自身失败时也不打印原始错误。检查工件和本机路径只留在忽略的`outputs/validation/`中，不随公共包发布。
+
+`.gitignore`不能保护已经追踪的文件，也不能删除历史秘密。扫描器是启发式检查，不是无泄露保证。发布前仍须审核实际文件内容、版权、来源和Git历史。发现历史风险时先停止发布，不自动强制推送或清理历史。

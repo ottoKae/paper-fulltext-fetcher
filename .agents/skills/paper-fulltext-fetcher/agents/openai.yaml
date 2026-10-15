@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Fulltext Fetcher"
+  short_description: "诊断校园网授权，合法获取并校验论文全文，保留逐篇结果和续跑证据"
+  default_prompt: "Use $paper-fulltext-fetcher to diagnose my access and acquire verified full text for my bibliography."

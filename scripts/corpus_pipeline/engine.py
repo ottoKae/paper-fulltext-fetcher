@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import platform
+import re
+import shutil
 import tempfile
 import time
 from collections import Counter
@@ -38,6 +41,7 @@ MANIFEST_FIELDS = [
     "source_format",
     "source_relpath",
     "conversion_source_relpath",
+    "conversion_source_sha256",
     "jats_preparation",
     "parser",
     "profile",
@@ -87,10 +91,14 @@ def package_version(name: str, *aliases: str) -> str:
 
 def corpus_settings(runtime: RuntimePaths) -> dict[str, Any]:
     values = runtime.config.get("corpus") or {}
+    pdf_backend = str(values.get("pdf_backend", "default"))
+    if pdf_backend not in {"default", "pypdfium2"}:
+        raise ValueError("corpus.pdf_backend must be default or pypdfium2")
     languages = values.get("ocr_languages", ["english"])
     if isinstance(languages, str):
         languages = [languages]
     return {
+        "pdf_backend": pdf_backend,
         "ocr_languages": [str(value) for value in languages if str(value).strip()] or ["english"],
         "target_chars": int(values.get("target_chars", 2800)),
         "max_chars": int(values.get("max_chars", 3600)),
@@ -107,9 +115,13 @@ def profile_spec(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if profile not in {"benchmark", "base", "force-ocr", "accurate"}:
         raise ValueError(f"unsupported conversion profile: {profile}")
+    pdf_backend = settings.get("pdf_backend", "default")
+    if pdf_backend not in {"default", "pypdfium2"}:
+        raise ValueError("unsupported PDF backend")
     public = {
         "profile": profile,
         "pipeline": "standard",
+        "pdf_backend": pdf_backend,
         "device": "cpu",
         "threads": threads,
         "do_ocr": True,
@@ -122,6 +134,7 @@ def profile_spec(
         "generate_images": False,
         "enable_remote_services": False,
         "allow_external_plugins": False,
+        "jats_format_selection": "explicit_validated_jats",
         "document_timeout": 1200,
         "artifacts_configured": artifacts_path is not None,
         "chunker": {
@@ -170,9 +183,29 @@ def make_converter(spec: dict[str, Any]) -> Any:
         )
     if spec.get("artifacts_path"):
         options.artifacts_path = Path(spec["artifacts_path"])
-    return DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+    pdf_format = PdfFormatOption(pipeline_options=options)
+    if spec.get("pdf_backend", "default") == "pypdfium2":
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+
+        pdf_format = PdfFormatOption(pipeline_options=options, backend=PyPdfiumDocumentBackend)
+    elif spec.get("pdf_backend", "default") != "default":
+        raise ValueError("unsupported PDF backend")
+    return DocumentConverter(format_options={InputFormat.PDF: pdf_format})
+
+
+def convert_validated_jats(converter: Any, source: Path) -> Any:
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.document import InputDocument
+
+    options = converter.format_to_options[InputFormat.XML_JATS]
+    document = InputDocument(
+        path_or_stream=source,
+        format=InputFormat.XML_JATS,
+        backend=options.backend,
+        backend_options=options.backend_options_for_input(source),
     )
+    pipeline = options.pipeline_cls(options.pipeline_options)
+    return pipeline.execute(document, raises_on_error=False)
 
 
 def benchmark_records(records: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -215,8 +248,10 @@ def choose_records(
     return chosen[:limit] if limit is not None else chosen
 
 
-def output_directories(runtime: RuntimePaths, profile: str, config8: str) -> dict[str, Path]:
-    root = runtime.corpus_root / "derived" / profile / config8
+def output_directories(runtime: RuntimePaths, profile: str, config8: str, run_id: str) -> dict[str, Path]:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}", run_id):
+        raise ValueError("run ID must be a safe single path component of at most 96 characters")
+    root = runtime.corpus_root / "derived" / profile / config8 / run_id
     return {
         "root": root,
         "json": root / "docling_json",
@@ -251,11 +286,17 @@ def successful_resume(row: dict[str, str], expected: dict[str, str], workspace: 
         return False
     if row.get("config_sha256") != expected["config_sha256"]:
         return False
-    for path_key, hash_key in (
+    required_outputs = [
         ("json_relpath", "json_sha256"),
         ("md_relpath", "md_sha256"),
         ("chunks_relpath", "chunks_sha256"),
-    ):
+    ]
+    if row.get("source_format") == "xml":
+        required_outputs.extend([
+            ("conversion_source_relpath", "conversion_source_sha256"),
+            ("source_map_relpath", "source_map_sha256"),
+        ])
+    for path_key, hash_key in required_outputs:
         relpath = row.get(path_key, "")
         if not relpath:
             return False
@@ -331,8 +372,13 @@ def convert_record_worker(
                 source_map_path,
             )
         row["conversion_source_relpath"] = relative_posix(conversion_source, workspace)
+        row["conversion_source_sha256"] = sha256_file(conversion_source)
         row["jats_preparation"] = jats_preparation
-        result = converter.convert(conversion_source, raises_on_error=False)
+        result = (
+            convert_validated_jats(converter, conversion_source)
+            if record["source_format"] == "xml"
+            else converter.convert(conversion_source, raises_on_error=False)
+        )
         if result.status not in {ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS}:
             raise RuntimeError(f"Docling conversion status: {result.status}")
         document = result.document
@@ -427,14 +473,23 @@ def run_conversion(
     config_digest = config_sha256(public_spec)
     config8 = config_digest[:8]
     run_id = run_id or f"{time.strftime('%Y%m%d_%H%M%S')}_{profile}_{config8}"
+    directories = output_directories(runtime, profile, config8, run_id)
+    records = choose_records(load_registry(runtime.registry), profile, selection, limit)
+    manifest_path = runtime.corpus_root / "manifests" / "conversion_manifest.csv"
+    if manifest_path.is_file():
+        with manifest_path.open(encoding="utf-8-sig", newline="") as stream:
+            if next(csv.reader(stream), []) != MANIFEST_FIELDS:
+                raise ValueError("legacy manifest schema: archive and explicitly migrate it before conversion")
     run_dir = runtime.runs_root / "runs" / run_id
     if run_dir.exists():
         raise FileExistsError("corpus run ID already exists; choose a new --run-id")
-    run_dir.mkdir(parents=True)
+    directories["root"].mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(parents=True, exist_ok=False)
+    shutil.copyfile(runtime.registry, run_dir / "registry.csv")
+    shutil.copyfile(runtime.config_path, run_dir / "acquisition.local.toml")
+    if selection:
+        shutil.copyfile(selection, run_dir / "selection.csv")
     event_path = run_dir / "events.jsonl"
-    manifest_path = runtime.corpus_root / "manifests" / "conversion_manifest.csv"
-    records = choose_records(load_registry(runtime.registry), profile, selection, limit)
-    directories = output_directories(runtime, profile, config8)
     for directory in directories.values():
         directory.mkdir(parents=True, exist_ok=True)
     existing = read_csv(manifest_path) if manifest_path.is_file() else []
